@@ -7,30 +7,31 @@ if (!MONGODB_URI) {
   throw new Error("Please define MONGODB_URI in .env.local");
 }
 
-// We cache the connection across hot-reloads in dev
-// so we don't create new connections on every request.
-let cached = (global as any).mongoose as
-  | { conn: typeof mongoose | null; promise: Promise<typeof mongoose> | null }
-  | undefined;
+type Cached = {
+  conn: typeof mongoose | null;
+  promise: Promise<typeof mongoose> | null;
+};
+
+const globalAny = global as typeof globalThis & {
+  _mongoose?: Cached;
+};
+
+let cached = globalAny._mongoose;
 
 if (!cached) {
-  cached = (global as any).mongoose = {
-    conn: null,
-    promise: null,
-  };
+  cached = globalAny._mongoose = { conn: null, promise: null };
 }
 
 async function connectDB() {
   if (cached!.conn) return cached!.conn;
 
   if (!cached!.promise) {
-    cached!.promise = mongoose.connect(MONGODB_URI).then((m) => m);
+    cached!.promise = mongoose.connect(MONGODB_URI!).then((m) => m);
   }
 
   cached!.conn = await cached!.promise;
   return cached!.conn;
 }
 
-// ⚠ important: default export so `import connectDB from "@/lib/mongodb"` works
 export default connectDB;
 export { connectDB };
