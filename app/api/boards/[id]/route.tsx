@@ -1,70 +1,51 @@
-// app/api/lists/[id]/route.ts
+// app/api/boards/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongodb";
-import { List } from "@/models/List";
-import { Card } from "@/models/Card";
+import connectDB from "@/lib/mongodb";
+import Board from "@/models/Board";
 
-// PATCH /api/lists/:id  -> rename list
-export async function PATCH(req: NextRequest) {
-  try {
-    await connectDB();
+type RouteParams = {
+  id: string;
+};
 
-    // extract id from URL: /api/lists/:id
-    const url = new URL(req.url);
-    const segments = url.pathname.split("/").filter(Boolean);
-    const id = segments[segments.length - 1];
+// PATCH  /api/boards/:id  → rename board
+export async function PATCH(
+  req: NextRequest,
+  context: { params: Promise<RouteParams> }
+) {
+  const { id } = await context.params;
 
-    if (!id) {
-      return new NextResponse("List id is required", { status: 400 });
-    }
+  await connectDB();
 
-    const { title } = await req.json();
-    if (!title || !title.trim()) {
-      return new NextResponse("Title is required", { status: 400 });
-    }
+  const { title } = await req.json();
 
-    const updated = await List.findByIdAndUpdate(
-      id,
-      { title: title.trim() },
-      { new: true }
-    ).lean();
-
-    if (!updated) {
-      return new NextResponse("List not found", { status: 404 });
-    }
-
-    return NextResponse.json(updated);
-  } catch (err) {
-    console.error("PATCH /api/lists/[id] error:", err);
-    return new NextResponse("Internal Server Error", { status: 500 });
+  if (!title || !title.trim()) {
+    return new NextResponse("Title is required", { status: 400 });
   }
+
+  const board = await Board.findByIdAndUpdate(
+    id,
+    { title: title.trim() },
+    { new: true }
+  ).lean();
+
+  if (!board) {
+    return new NextResponse("Board not found", { status: 404 });
+  }
+
+  return NextResponse.json(board);
 }
 
-// DELETE /api/lists/:id  -> delete list + its cards
-export async function DELETE(req: NextRequest) {
-  try {
-    await connectDB();
+// DELETE  /api/boards/:id  → delete board
+export async function DELETE(
+  _req: NextRequest,
+  context: { params: Promise<RouteParams> }
+) {
+  const { id } = await context.params;
 
-    const url = new URL(req.url);
-    const segments = url.pathname.split("/").filter(Boolean);
-    const id = segments[segments.length - 1];
+  await connectDB();
 
-    if (!id) {
-      return new NextResponse("List id is required", { status: 400 });
-    }
+  // just delete board; lists/cards deletion you already handle via board-full if needed
+  await Board.findByIdAndDelete(id);
 
-    // delete cards in this list
-    await Card.deleteMany({ listId: id });
-
-    // delete the list itself
-    const deleted = await List.findByIdAndDelete(id);
-    if (!deleted) {
-      return new NextResponse("List not found", { status: 404 });
-    }
-
-    return new NextResponse(null, { status: 204 });
-  } catch (err) {
-    console.error("DELETE /api/lists/[id] error:", err);
-    return new NextResponse("Internal Server Error", { status: 500 });
-  }
+  return new NextResponse(null, { status: 204 });
 }

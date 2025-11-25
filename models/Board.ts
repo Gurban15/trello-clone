@@ -5,7 +5,13 @@ const BoardSchema = new Schema(
   {
     title: { type: String, required: true },
   },
-  { timestamps: true }
+  {
+    timestamps: true,
+  }
 );
 
-export const Board = models.Board || model("Board", BoardSchema);
+// Re-use existing model if it exists (important in Next.js dev)
+const Board = models.Board || model("Board", BoardSchema);
+
+export default Board;
+export { Board };
