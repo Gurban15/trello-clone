@@ -1,7 +1,13 @@
-// app/board/[id]/BoardContent.tsx
 "use client";
 
-import { useState, FormEvent, MouseEvent } from "react";
+import { useEffect, useState, FormEvent } from "react";
+import Link from "next/link";
+import posthog from "@/lib/posthogClient";
+
+type Board = {
+  _id: string;
+  title: string;
+};
 
 type List = {
   _id: string;
@@ -16,359 +22,517 @@ type Card = {
   listId: string;
 };
 
-interface Props {
+type Props = {
   boardId: string;
-  initialLists: List[];
-  initialCards: Card[];
-}
+};
 
-export default function BoardContent({
-  boardId,
-  initialLists,
-  initialCards,
-}: Props) {
-  const [lists, setLists] = useState<List[]>(initialLists);
-  const [cards, setCards] = useState<Card[]>(initialCards);
+export default function BoardContent({ boardId }: Props) {
+  const [board, setBoard] = useState<Board | null>(null);
+  const [lists, setLists] = useState<List[]>([]);
+  const [cards, setCards] = useState<Card[]>([]);
+  const [loadingBoard, setLoadingBoard] = useState(true);
+
   const [newListTitle, setNewListTitle] = useState("");
   const [newCardTitles, setNewCardTitles] = useState<Record<string, string>>(
     {}
   );
 
-  // Modal state for cards
-  const [selectedCard, setSelectedCard] = useState<Card | null>(null);
-  const [editCardTitle, setEditCardTitle] = useState("");
-  const [editCardDescription, setEditCardDescription] = useState("");
 
-  // ---------------- LISTS ----------------
+  const [editingCard, setEditingCard] = useState<Card | null>(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [editDescription, setEditDescription] = useState("");
+  const [isSavingCard, setIsSavingCard] = useState(false);
+  const [isDeletingCard, setIsDeletingCard] = useState(false);
+
+  async function loadBoard() {
+    setLoadingBoard(true);
+    try {
+      const res = await fetch(`/api/board-full?id=${boardId}`);
+      if (!res.ok) {
+        console.error("Failed to load board:", await res.text());
+        setBoard(null);
+        setLists([]);
+        setCards([]);
+        return;
+      }
+
+      const json = await res.json();
+      setBoard(json.board);
+      setLists(json.lists || []);
+      setCards(json.cards || []);
+
+      if (posthog) {
+        posthog.capture("board_opened", { boardId });
+      }
+    } catch (err) {
+      console.error("Error loading board:", err);
+      setBoard(null);
+      setLists([]);
+      setCards([]);
+    } finally {
+      setLoadingBoard(false);
+    }
+  }
+
+  useEffect(() => {
+    if (boardId) {
+      loadBoard();
+    }
+  }, [boardId]);
+
 
   async function handleCreateList(e: FormEvent) {
     e.preventDefault();
-    if (!newListTitle.trim()) return;
+    const title = newListTitle.trim();
+    if (!title) return;
 
-    const res = await fetch("/api/lists", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boardId, title: newListTitle }),
-    });
+    try {
+      const res = await fetch("/api/lists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, boardId }),
+      });
 
-    if (res.ok) {
-      const list: List = await res.json();
-      setLists((prev) => [...prev, list]);
+      if (!res.ok) {
+        console.error("Error creating list:", await res.text());
+        alert("Could not create list.");
+        return;
+      }
+
+      const created: List = await res.json();
+      setLists((prev) => [...prev, created]);
       setNewListTitle("");
-    } else {
-      const msg = await res.text();
-      console.error("Failed to create list:", msg);
-      alert("Could not create list: " + msg);
+
+      if (posthog) {
+        posthog.capture("list_created", {
+          listId: created._id,
+          boardId,
+        });
+      }
+    } catch (err) {
+      console.error("Error creating list:", err);
+      alert("Could not create list.");
     }
   }
 
   async function handleRenameList(list: List) {
-    const newName = window.prompt("New list name:", list.title);
-    if (!newName || !newName.trim()) return;
+    const nextTitle = window.prompt("New list title", list.title);
+    if (!nextTitle) return;
 
-    const res = await fetch(`/api/lists/${list._id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: newName }),
-    });
+    const title = nextTitle.trim();
+    if (!title || title === list.title) return;
 
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error("Failed to rename list:", msg);
-      alert("Could not rename list: " + msg);
-      return;
+    try {
+      const res = await fetch(`/api/lists/${list._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title }),
+      });
+
+      if (!res.ok) {
+        console.error("Error renaming list:", await res.text());
+        alert("Could not rename list.");
+        return;
+      }
+
+      const updated: List = await res.json();
+      setLists((prev) =>
+        prev.map((l) => (l._id === updated._id ? updated : l))
+      );
+
+      if (posthog) {
+        posthog.capture("list_updated", {
+          listId: updated._id,
+          boardId,
+        });
+      }
+    } catch (err) {
+      console.error("Error renaming list:", err);
+      alert("Could not rename list.");
     }
-
-    const updated: List = await res.json();
-    setLists((prev) =>
-      prev.map((l) => (l._id === updated._id ? updated : l))
-    );
   }
 
-  async function handleDeleteList(listId: string) {
+  async function handleDeleteList(list: List) {
     const confirmed = window.confirm(
       "Delete this list and all its cards? This cannot be undone."
     );
     if (!confirmed) return;
 
-    const res = await fetch(`/api/lists/${listId}`, { method: "DELETE" });
+    try {
+      const res = await fetch(`/api/lists/${list._id}`, {
+        method: "DELETE",
+      });
 
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error("Failed to delete list:", msg);
-      alert("Could not delete list: " + msg);
-      return;
-    }
+      if (!res.ok && res.status !== 204) {
+        console.error("Error deleting list:", await res.text());
+        alert("Could not delete list.");
+        return;
+      }
 
-    setLists((prev) => prev.filter((l) => l._id !== listId));
-    setCards((prev) => prev.filter((c) => c.listId !== listId));
-  }
+      setLists((prev) => prev.filter((l) => l._id !== list._id));
+      setCards((prev) => prev.filter((c) => c.listId !== list._id));
 
-  // ---------------- CARDS ----------------
-
-  async function handleCreateCard(listId: string, e: FormEvent) {
-    e.preventDefault();
-    const title = newCardTitles[listId];
-    if (!title || !title.trim()) return;
-
-    const res = await fetch("/api/cards", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listId, title }), // description optional at creation
-    });
-
-    if (res.ok) {
-      const card: Card = await res.json();
-      setCards((prev) => [...prev, card]);
-      setNewCardTitles((prev) => ({ ...prev, [listId]: "" }));
-    } else {
-      const msg = await res.text();
-      console.error("Failed to create card:", msg);
-      alert("Could not create card: " + msg);
+      if (posthog) {
+        posthog.capture("list_deleted", {
+          listId: list._id,
+          boardId,
+        });
+      }
+    } catch (err) {
+      console.error("Error deleting list:", err);
+      alert("Could not delete list.");
     }
   }
 
-  async function handleDeleteCard(cardId: string) {
-    const res = await fetch(`/api/cards/${cardId}`, { method: "DELETE" });
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error("Failed to delete card:", msg);
-      alert("Could not delete card: " + msg);
-      return;
+
+
+  async function handleCreateCard(listId: string) {
+    const title = (newCardTitles[listId] || "").trim();
+    if (!title) return;
+
+    try {
+      const res = await fetch("/api/cards", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, listId }),
+      });
+
+      if (!res.ok) {
+        console.error("Error creating card:", await res.text());
+        alert("Could not create card.");
+        return;
+      }
+
+      const created: Card = await res.json();
+      setCards((prev) => [...prev, created]);
+
+      setNewCardTitles((prev) => ({
+        ...prev,
+        [listId]: "",
+      }));
+
+      if (posthog) {
+        posthog.capture("card_created", {
+          cardId: created._id,
+          listId,
+          boardId,
+        });
+      }
+    } catch (err) {
+      console.error("Error creating card:", err);
+      alert("Could not create card.");
     }
-
-    setCards((prev) => prev.filter((c) => c._id !== cardId));
-
-    // If this card is open in the modal, close it
-    setSelectedCard((current) =>
-      current && current._id === cardId ? null : current
-    );
   }
 
-  function openCardModal(card: Card) {
-    setSelectedCard(card);
-    setEditCardTitle(card.title);
-    setEditCardDescription(card.description ?? "");
-  }
-
-  function closeCardModal() {
-    setSelectedCard(null);
+  // Open modal for a card
+  function openCard(card: Card) {
+    setEditingCard(card);
+    setEditTitle(card.title);
+    setEditDescription(card.description || "");
   }
 
   async function handleSaveCard() {
-    if (!selectedCard) return;
-    if (!editCardTitle.trim()) {
-      alert("Title cannot be empty");
-      return;
+    if (!editingCard) return;
+
+    setIsSavingCard(true);
+    try {
+      const res = await fetch(`/api/cards/${editingCard._id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: editTitle.trim(),
+          description: editDescription.trim(),
+        }),
+      });
+
+      if (!res.ok) {
+        console.error("Error updating card:", await res.text());
+        alert("Could not save card. Please try again.");
+        return;
+      }
+
+      const updated: Card = await res.json();
+
+      setCards((prev) =>
+        prev.map((c) => (c._id === updated._id ? updated : c))
+      );
+
+      if (posthog) {
+        posthog.capture("card_updated", {
+          cardId: updated._id,
+          boardId,
+        });
+      }
+
+      alert("Card saved.");
+      setEditingCard(null);
+    } catch (err) {
+      console.error("Error updating card:", err);
+      alert("Could not save card. Please try again.");
+    } finally {
+      setIsSavingCard(false);
     }
-
-    const res = await fetch(`/api/cards/${selectedCard._id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        title: editCardTitle,
-        description: editCardDescription,
-      }),
-    });
-
-    if (!res.ok) {
-      const msg = await res.text();
-      console.error("Failed to update card:", msg);
-      alert("Could not update card: " + msg);
-      return;
-    }
-
-    const updated: Card = await res.json();
-
-    setCards((prev) =>
-      prev.map((c) => (c._id === updated._id ? updated : c))
-    );
-
-    // ✅ Close the modal after successful save
-    closeCardModal();
   }
 
-  // ---------------- RENDER ----------------
+
+  async function handleDeleteCardFromModal() {
+    if (!editingCard) return;
+
+    const confirmed = window.confirm("Delete this card? This cannot be undone.");
+    if (!confirmed) return;
+
+    setIsDeletingCard(true);
+    try {
+      const res = await fetch(`/api/cards/${editingCard._id}`, {
+        method: "DELETE",
+      });
+
+      if (!res.ok && res.status !== 204) {
+        console.error("Error deleting card:", await res.text());
+        alert("Could not delete card. Please try again.");
+        return;
+      }
+
+      setCards((prev) => prev.filter((c) => c._id !== editingCard._id));
+
+      if (posthog) {
+        posthog.capture("card_deleted", {
+          cardId: editingCard._id,
+          boardId,
+        });
+      }
+
+      alert("Card deleted.");
+      setEditingCard(null);
+    } catch (err) {
+      console.error("Error deleting card:", err);
+      alert("Could not delete card. Please try again.");
+    } finally {
+      setIsDeletingCard(false);
+    }
+  }
+
+
+
+  if (loadingBoard) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50">
+        <div className="mx-auto max-w-5xl px-4 py-10">
+          <p className="text-slate-300">Loading board…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (!board) {
+    return (
+      <main className="min-h-screen bg-slate-950 text-slate-50">
+        <div className="mx-auto max-w-5xl px-4 py-10 space-y-4">
+          <Link
+            href="/"
+            className="text-sm text-indigo-300 hover:text-indigo-200 underline"
+          >
+            ← Back to boards
+          </Link>
+          <h1 className="text-2xl font-semibold">Board</h1>
+          <p className="text-slate-400">Board not found.</p>
+        </div>
+      </main>
+    );
+  }
 
   return (
-    <div className="space-y-4">
-      {/* Create list */}
-      <form onSubmit={handleCreateList} className="flex gap-2">
-        <input
-          className="bg-slate-800 border border-slate-700 px-3 py-2 rounded text-sm text-slate-50 placeholder:text-slate-400 flex-1"
-          placeholder="New list title"
-          value={newListTitle}
-          onChange={(e) => setNewListTitle(e.target.value)}
-        />
-        <button
-          type="submit"
-          className="px-4 py-2 bg-indigo-500 hover:bg-indigo-400 text-white text-sm font-medium rounded shadow-sm"
-        >
-          Add list
-        </button>
-      </form>
+    <main className="min-h-screen bg-slate-950 text-slate-50">
+      <div className="mx-auto max-w-6xl px-4 py-6 space-y-6">
+        {/* Header */}
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <Link
+              href="/"
+              className="text-sm text-indigo-300 hover:text-indigo-200 underline"
+            >
+              ← Back to boards
+            </Link>
+            <h1 className="mt-2 text-2xl font-semibold">{board.title}</h1>
+          </div>
 
-      {/* Lists + cards */}
-      <div className="flex gap-4 overflow-x-auto pb-4">
-        {lists.map((list) => {
-          const listCards = cards.filter((c) => c.listId === list._id);
-          const cardTitle = newCardTitles[list._id] ?? "";
+          {/* Add list */}
+          <form
+            onSubmit={handleCreateList}
+            className="flex items-center gap-2"
+          >
+            <input
+              type="text"
+              placeholder="New list title"
+              className="w-56 rounded border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-500"
+              value={newListTitle}
+              onChange={(e) => setNewListTitle(e.target.value)}
+            />
+            <button
+              type="submit"
+              className="rounded bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500"
+            >
+              Add list
+            </button>
+          </form>
+        </div>
 
-          return (
+        {/* Lists + cards */}
+        <section className="flex gap-4 overflow-x-auto pb-4">
+          {lists.map((list) => (
             <div
               key={list._id}
-              className="bg-slate-800/80 border border-slate-700 rounded-xl shadow-lg p-3 w-64 flex-shrink-0"
+              className="w-64 flex-shrink-0 rounded-xl bg-slate-900 border border-slate-800 shadow-sm flex flex-col"
             >
-              <div className="flex justify-between items-center mb-3">
-                <h2 className="font-semibold text-slate-50 text-sm truncate">
+              {/* List header */}
+              <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-3 py-2">
+                <h2 className="truncate text-sm font-semibold">
                   {list.title}
                 </h2>
-                <div className="flex gap-2 items-center">
+                <div className="flex gap-1">
                   <button
+                    type="button"
                     onClick={() => handleRenameList(list)}
-                    className="text-[11px] text-slate-300 hover:text-slate-100"
+                    className="rounded border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:bg-slate-800"
                   >
                     Rename
                   </button>
                   <button
-                    onClick={() => handleDeleteList(list._id)}
-                    className="text-[11px] text-red-300 hover:text-red-200"
+                    type="button"
+                    onClick={() => handleDeleteList(list)}
+                    className="rounded border border-rose-500 px-2 py-1 text-[11px] text-rose-300 hover:bg-rose-500/10"
                   >
                     Delete
                   </button>
                 </div>
               </div>
 
-              <div className="space-y-2 mb-3 max-h-64 overflow-y-auto pr-1">
-                {listCards.map((card) => (
-                  <div
-                    key={card._id}
-                    onClick={() => openCardModal(card)}
-                    className="bg-slate-700 rounded-lg px-2 py-1.5 text-xs flex justify-between items-center text-slate-50 cursor-pointer hover:bg-slate-600"
-                  >
-                    <span className="truncate">{card.title}</span>
+              {/* Cards */}
+              <div className="flex-1 space-y-2 overflow-y-auto px-3 py-3">
+                {cards
+                  .filter((c) => c.listId === list._id)
+                  .map((card) => (
                     <button
-                      onClick={(e: MouseEvent) => {
-                        e.stopPropagation(); // don’t open modal when clicking delete
-                        handleDeleteCard(card._id);
-                      }}
-                      className="text-[10px] text-red-300 hover:text-red-200 ml-2"
+                      key={card._id}
+                      type="button"
+                      onClick={() => openCard(card)}
+                      className="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-left text-sm text-slate-50 hover:border-emerald-500 hover:bg-slate-800/80"
                     >
-                      ✕
+                      <span className="block truncate">{card.title}</span>
+                      {card.description && (
+                        <span className="mt-1 block text-xs text-slate-400 line-clamp-2">
+                          {card.description}
+                        </span>
+                      )}
                     </button>
-                  </div>
-                ))}
-
-                {listCards.length === 0 && (
-                  <p className="text-[11px] text-slate-400 italic">
-                    No cards yet.
-                  </p>
-                )}
+                  ))}
               </div>
 
-              {/* Add card */}
-              <form
-                onSubmit={(e) => handleCreateCard(list._id, e)}
-                className="flex gap-1"
-              >
-                <input
-                  className="bg-slate-900 border border-slate-700 px-2 py-1 text-[11px] flex-1 rounded text-slate-50 placeholder:text-slate-500"
-                  placeholder="New card title"
-                  value={cardTitle}
-                  onChange={(e) =>
-                    setNewCardTitles((prev) => ({
-                      ...prev,
-                      [list._id]: e.target.value,
-                    }))
-                  }
-                />
-                <button
-                  type="submit"
-                  className="px-2 text-[11px] bg-emerald-500 hover:bg-emerald-400 text-white rounded"
-                >
-                  +
-                </button>
-              </form>
+              {/* New card input */}
+              <div className="border-t border-slate-800 px-3 py-3">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    placeholder="New card title"
+                    className="flex-1 rounded border border-slate-700 bg-slate-900 px-3 py-1.5 text-xs text-slate-50 outline-none focus:border-emerald-500"
+                    value={newCardTitles[list._id] || ""}
+                    onChange={(e) =>
+                      setNewCardTitles((prev) => ({
+                        ...prev,
+                        [list._id]: e.target.value,
+                      }))
+                    }
+                  />
+                  <button
+                    type="button"
+                    onClick={() => handleCreateCard(list._id)}
+                    className="rounded bg-emerald-600 px-2.5 py-1.5 text-xs font-medium text-white hover:bg-emerald-500"
+                  >
+                    +
+                  </button>
+                </div>
+              </div>
             </div>
-          );
-        })}
+          ))}
 
-        {lists.length === 0 && (
-          <p className="text-slate-400 text-sm">
-            No lists yet for this board. Create one above to get started.
-          </p>
-        )}
+          {lists.length === 0 && (
+            <p className="text-sm text-slate-400">
+              No lists yet. Use the field above to create your first list.
+            </p>
+          )}
+        </section>
       </div>
 
-      {/* Card modal */}
-      {selectedCard && (
-        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-6 w-full max-w-lg shadow-2xl">
-            <div className="flex justify-between items-center mb-4">
+      {/* Card edit modal */}
+      {editingCard && (
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/60">
+          <div className="w-full max-w-lg rounded-xl bg-slate-900 p-6 shadow-xl border border-slate-700">
+            <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-slate-50">
                 Edit card
               </h2>
               <button
-                onClick={closeCardModal}
-                className="text-slate-400 hover:text-slate-100 text-sm"
+                type="button"
+                onClick={() => setEditingCard(null)}
+                className="text-slate-400 hover:text-slate-200 text-xl leading-none"
               >
-                ✕
+                ×
               </button>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs text-slate-400 mb-1">
+                <label className="block text-xs font-medium text-slate-400 mb-1">
                   Title
                 </label>
                 <input
-                  className="w-full bg-slate-800 border border-slate-700 px-3 py-2 rounded text-sm text-slate-50 placeholder:text-slate-500"
-                  value={editCardTitle}
-                  onChange={(e) => setEditCardTitle(e.target.value)}
+                  type="text"
+                  className="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-500"
+                  value={editTitle}
+                  onChange={(e) => setEditTitle(e.target.value)}
                 />
               </div>
 
               <div>
-                <label className="block text-xs text-slate-400 mb-1">
+                <label className="block text-xs font-medium text-slate-400 mb-1">
                   Description
                 </label>
                 <textarea
-                  className="w-full bg-slate-800 border border-slate-700 px-3 py-2 rounded text-sm text-slate-50 placeholder:text-slate-500 min-h-[120px]"
-                  value={editCardDescription}
-                  onChange={(e) => setEditCardDescription(e.target.value)}
-                  placeholder="Add a more detailed description..."
+                  rows={4}
+                  className="w-full rounded border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-50 outline-none focus:border-emerald-500"
+                  placeholder="Add some details about this card…"
+                  value={editDescription}
+                  onChange={(e) => setEditDescription(e.target.value)}
                 />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  Changes are saved when you click{" "}
+                  <span className="font-semibold">Save</span>.
+                </p>
               </div>
             </div>
 
-            <div className="mt-6 flex justify-between items-center">
+            <div className="mt-6 flex items-center justify-between gap-3">
               <button
-                onClick={() =>
-                  selectedCard && handleDeleteCard(selectedCard._id)
-                }
-                className="text-sm text-red-300 hover:text-red-200"
+                type="button"
+                onClick={handleSaveCard}
+                disabled={isSavingCard}
+                className="inline-flex items-center justify-center rounded bg-emerald-600 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60"
               >
-                Delete card
+                {isSavingCard ? "Saving..." : "Save"}
               </button>
 
-              <div className="flex gap-2">
-                <button
-                  onClick={closeCardModal}
-                  className="px-4 py-2 text-sm rounded border border-slate-600 text-slate-200 hover:bg-slate-800"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleSaveCard}
-                  className="px-4 py-2 text-sm rounded bg-emerald-500 hover:bg-emerald-400 text-white font-medium"
-                >
-                  Save
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleDeleteCardFromModal}
+                disabled={isDeletingCard}
+                className="inline-flex items-center justify-center rounded border border-rose-500 px-3 py-2 text-sm font-medium text-rose-300 hover:bg-rose-500/10 disabled:opacity-60"
+              >
+                {isDeletingCard ? "Deleting…" : "Delete card"}
+              </button>
             </div>
           </div>
         </div>
       )}
-    </div>
+    </main>
   );
 }

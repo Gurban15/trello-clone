@@ -1,11 +1,10 @@
-// models/Card.ts
-import { Schema, model, models, Types } from "mongoose";
+import { Schema, model, models } from "mongoose";
 
 const CardSchema = new Schema(
   {
     title: { type: String, required: true },
     description: { type: String, default: "" },
-    listId: { type: Types.ObjectId, ref: "List", required: true },
+    listId: { type: Schema.Types.ObjectId, ref: "List", required: true },
     position: { type: Number, default: 0 },
   },
   { timestamps: true }

@@ -1,66 +1,83 @@
-// app/api/cards/[id]/route.ts
 import { NextRequest, NextResponse } from "next/server";
-import { connectDB } from "@/lib/mongodb";
-import { Card } from "@/models/Card";
+import connectDB from "@/lib/mongodb";
+import Card from "@/models/Card";
 
-// PATCH /api/cards/:id  -> update title/description
-export async function PATCH(req: NextRequest) {
+type RouteContext = {
+  params: Promise<{ id: string }>;
+};
+
+
+export async function PATCH(req: NextRequest, context: RouteContext) {
   try {
     await connectDB();
 
-    const url = new URL(req.url);
-    const segments = url.pathname.split("/").filter(Boolean);
-    const id = segments[segments.length - 1];
-
+    const { id } = await context.params;
     if (!id) {
-      return new NextResponse("Card id is required", { status: 400 });
+      return NextResponse.json(
+        { message: "Card id is required" },
+        { status: 400 }
+      );
     }
 
-    const { title, description } = await req.json();
+    const body = await req.json();
+    const updates: any = {};
 
-    if (!title || !title.trim()) {
-      return new NextResponse("Title is required", { status: 400 });
+    if (body?.title !== undefined) {
+      updates.title = body.title.toString();
+    }
+    if (body?.description !== undefined) {
+      updates.description = body.description.toString();
     }
 
-    const updated = await Card.findByIdAndUpdate(
-      id,
-      { title: title.trim(), description: description ?? "" },
-      { new: true }
-    ).lean();
+    const updated = await Card.findByIdAndUpdate(id, updates, {
+      new: true,
+    }).lean();
 
     if (!updated) {
-      return new NextResponse("Card not found", { status: 404 });
+      return NextResponse.json(
+        { message: "Card not found" },
+        { status: 404 }
+      );
     }
 
-    return NextResponse.json(updated);
+    return NextResponse.json(updated, { status: 200 });
   } catch (err) {
-    console.error("PATCH /api/cards/[id] error:", err);
-    return new NextResponse("Internal Server Error", { status: 500 });
+    console.error("PATCH /api/cards/[id] error", err);
+    return NextResponse.json(
+      { message: "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }
 
-// DELETE /api/cards/:id  -> delete a card
-export async function DELETE(req: NextRequest) {
+
+export async function DELETE(req: NextRequest, context: RouteContext) {
   try {
     await connectDB();
 
-    const url = new URL(req.url);
-    const segments = url.pathname.split("/").filter(Boolean);
-    const id = segments[segments.length - 1];
-
+    const { id } = await context.params;
     if (!id) {
-      return new NextResponse("Card id is required", { status: 400 });
+      return NextResponse.json(
+        { message: "Card id is required" },
+        { status: 400 }
+      );
     }
 
-    const deleted = await Card.findByIdAndDelete(id);
+    const deleted = await Card.findByIdAndDelete(id).lean();
 
     if (!deleted) {
-      return new NextResponse("Card not found", { status: 404 });
+      return NextResponse.json(
+        { message: "Card not found" },
+        { status: 404 }
+      );
     }
 
     return new NextResponse(null, { status: 204 });
   } catch (err) {
-    console.error("DELETE /api/cards/[id] error:", err);
-    return new NextResponse("Internal Server Error", { status: 500 });
+    console.error("DELETE /api/cards/[id] error", err);
+    return NextResponse.json(
+      { message: "Internal Server Error" },
+      { status: 500 }
+    );
   }
 }

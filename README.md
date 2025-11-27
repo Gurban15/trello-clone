@@ -1,36 +1,89 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Trello Clone – Startup Assignment 01
 
-## Getting Started
+Small Trello-style app built for the Software Engineering assignment.
 
-First, run the development server:
+Live app: https://trello-clone-mzpw.vercel.app  
+Source code: https://github.com/Gurban15/trello-clone.git  
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+---
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## 1. Features
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+### Boards
+- See all boards on `/`
+- Create new boards
+- Rename existing boards
+- Delete boards  
+- Deleting a board also removes all its lists and cards (cascade delete)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+### Lists
+- Inside a board: create, rename, delete lists
+- Each list belongs to a single board
+- Deleting a list also deletes all its cards
 
-## Learn More
+### Cards
+- Inside a list: create, edit, delete cards
+- Each card has:
+  - **Title**
+  - **Description** (editable in a dialog)
+- Clicking a card opens an “Edit card” dialog where the title and description can be changed
 
-To learn more about Next.js, take a look at the following resources:
+This covers the assignment requirements: **collection of boards, lists of cards, and card content**.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+---
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+## 2. Tech Stack
 
-## Deploy on Vercel
+- **Next.js 16** (App Router) with **TypeScript**
+- **MongoDB Atlas** + **Mongoose**  
+  - Models: `Board`, `List`, `Card`
+- **Tailwind CSS** for styling (dark, simple UI)
+- **PostHog** for product analytics (events)
+- **Vercel** for deployment
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+---
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## 3. Data Model (Simplified)
+
+### Board
+- Fields: `_id`, `title`, `createdAt`, `updatedAt`
+
+### List
+- Fields: `_id`, `title`, `boardId`, `position`, `createdAt`, `updatedAt`
+- `boardId` links the list to its board
+
+### Card
+- Fields: `_id`, `title`, `description`, `listId`, `position`, `createdAt`, `updatedAt`
+- `listId` links the card to its list
+
+### Cascade delete
+
+- When a **board** is deleted:
+  - All lists with `boardId` = board’s `_id` are deleted
+  - All cards in those lists are deleted
+- When a **list** is deleted:
+  - All cards with `listId` = list’s `_id` are deleted
+
+This logic is implemented in the API routes under `app/api/boards/[id]` and `app/api/lists/[id]`.
+
+---
+
+## 4. Analytics with PostHog
+
+### Why PostHog?
+
+- Simple JavaScript SDK that works well with Next.js
+- Free tier that is enough for a student project
+- Focused on product analytics (events, funnels, retention)
+- Works fully on the client side in this project
+
+### Integration
+
+- Client helper in `lib/posthogClient.ts`
+- Uses environment variables:
+  - `NEXT_PUBLIC_POSTHOG_KEY`
+  - `NEXT_PUBLIC_POSTHOG_HOST`
+- In React components I call:
+
+```ts
+posthog?.capture("event_name", { ...properties });

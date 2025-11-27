@@ -1,8 +1,8 @@
-// app/page.tsx
 "use client";
 
-import { useEffect, useState, FormEvent } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
+import posthog from "@/lib/posthogClient";
 
 type Board = {
   _id: string;
@@ -12,39 +12,38 @@ type Board = {
 export default function BoardsPage() {
   const [boards, setBoards] = useState<Board[]>([]);
   const [newTitle, setNewTitle] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [saving, setSaving] = useState(false);
+  const [loadingBoards, setLoadingBoards] = useState(false);
+  const [creating, setCreating] = useState(false);
 
-  // Load boards from API
-  useEffect(() => {
-    async function loadBoards() {
-      try {
-        setLoading(true);
-        const res = await fetch("/api/boards", { cache: "no-store" });
-        if (!res.ok) {
-          console.error("Failed to load boards", await res.text());
-          return;
-        }
-        const data = await res.json();
-        setBoards(data);
-      } catch (err) {
-        console.error("Error loading boards", err);
-      } finally {
-        setLoading(false);
+  
+  async function loadBoards() {
+    try {
+      setLoadingBoards(true);
+      const res = await fetch("/api/boards");
+      if (!res.ok) {
+        console.error("Failed to load boards:", await res.text());
+        return;
       }
+      const json = await res.json();
+      setBoards(json.boards || []);
+    } catch (err) {
+      console.error("Error loading boards", err);
+    } finally {
+      setLoadingBoards(false);
     }
+  }
 
+  useEffect(() => {
     loadBoards();
   }, []);
 
-  // Create board
-  async function handleCreateBoard(e: FormEvent) {
-    e.preventDefault();
+  
+  async function handleCreateBoard() {
     const title = newTitle.trim();
     if (!title) return;
 
     try {
-      setSaving(true);
+      setCreating(true);
       const res = await fetch("/api/boards", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -52,26 +51,38 @@ export default function BoardsPage() {
       });
 
       if (!res.ok) {
-        console.error("Failed to create board", await res.text());
+        console.error("Failed to create board:", await res.text());
+        alert("Could not create board.");
         return;
       }
 
-      const board: Board = await res.json();
-      setBoards((prev) => [...prev, board]);
+      const created = await res.json();
+
+      
+      if (posthog) {
+        posthog.capture("board_created", {
+          boardId: created._id,
+          title: created.title,
+        });
+      }
+
       setNewTitle("");
+      await loadBoards();
     } catch (err) {
       console.error("Error creating board", err);
+      alert("Could not create board.");
     } finally {
-      setSaving(false);
+      setCreating(false);
     }
   }
 
-  // Rename board
-  async function handleRenameBoard(id: string) {
-    const current = boards.find((b) => b._id === id);
-    const newName = window.prompt("New board name:", current?.title ?? "");
-    const title = newName?.trim();
-    if (!title || title === current?.title) return;
+
+  async function handleRenameBoard(id: string, currentTitle: string) {
+    const input = window.prompt("New board name:", currentTitle);
+    if (input === null) return; // user cancelled
+
+    const title = input.trim();
+    if (!title || title === currentTitle) return;
 
     try {
       const res = await fetch(`/api/boards/${id}`, {
@@ -86,18 +97,19 @@ export default function BoardsPage() {
         return;
       }
 
-      const updated: Board = await res.json();
 
-      setBoards((prev) =>
-        prev.map((b) => (b._id === id ? { ...b, title: updated.title } : b))
-      );
+      if (posthog) {
+        posthog.capture("board_renamed", { boardId: id, title });
+      }
+
+      await loadBoards();
     } catch (err) {
       console.error("Error renaming board", err);
       alert("Could not rename board.");
     }
   }
 
-  // Delete board
+
   async function handleDeleteBoard(id: string) {
     const confirmed = window.confirm(
       "Delete this board and all its lists and cards? This cannot be undone."
@@ -107,14 +119,18 @@ export default function BoardsPage() {
     try {
       const res = await fetch(`/api/boards/${id}`, { method: "DELETE" });
 
-      // 204 = success with no body
       if (!res.ok && res.status !== 204) {
         console.error("Failed to delete board:", await res.text());
         alert("Could not delete board.");
         return;
       }
 
-      setBoards((prev) => prev.filter((b) => b._id !== id));
+      // analytics
+      if (posthog) {
+        posthog.capture("board_deleted", { boardId: id });
+      }
+
+      await loadBoards();
     } catch (err) {
       console.error("Error deleting board", err);
       alert("Could not delete board.");
@@ -122,70 +138,68 @@ export default function BoardsPage() {
   }
 
   return (
-    <main className="min-h-screen bg-slate-950 text-slate-50 px-4 py-8">
-      <div className="max-w-3xl mx-auto">
+    <main className="min-h-screen bg-slate-950 text-slate-50">
+      <div className="max-w-4xl mx-auto py-10 px-4">
         <h1 className="text-3xl font-bold mb-6">Boards</h1>
 
-        <form
-          onSubmit={handleCreateBoard}
-          className="flex gap-2 mb-6 items-center"
-        >
+        <div className="flex gap-3 mb-6">
           <input
             type="text"
             value={newTitle}
             onChange={(e) => setNewTitle(e.target.value)}
             placeholder="New board title"
-            className="flex-1 rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="flex-1 rounded bg-slate-900 border border-slate-700 px-3 py-2 text-sm outline-none focus:border-emerald-400"
           />
           <button
-            type="submit"
-            disabled={saving}
-            className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium hover:bg-blue-500 disabled:opacity-60"
+            type="button"
+            onClick={handleCreateBoard}
+            disabled={creating}
+            className="px-4 py-2 rounded bg-emerald-600 hover:bg-emerald-500 text-sm font-medium disabled:opacity-60"
           >
-            Create board
+            {creating ? "Creating..." : "Create board"}
           </button>
-        </form>
+        </div>
 
-        {loading ? (
-          <p className="text-slate-400 text-sm">Loading boards…</p>
-        ) : boards.length === 0 ? (
-          <p className="text-slate-400 text-sm">
-            No boards yet. Use the field above to create one.
-          </p>
-        ) : (
-          <div className="flex flex-col gap-2">
-            {boards.map((board) => (
-              <div
-                key={board._id}
-                className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900 px-4 py-3"
+        <div className="space-y-2">
+          {boards.map((board) => (
+            <div
+              key={board._id}
+              className="flex items-center justify-between rounded border border-slate-800 bg-slate-900 px-4 py-3"
+            >
+              <Link
+                href={`/board/${board._id}`}
+                className="text-sm hover:underline"
               >
-                <Link
-                  href={`/board/${board._id}`}
-                  className="text-sm font-medium hover:underline"
-                >
-                  {board.title}
-                </Link>
+                {board.title}
+              </Link>
 
-                <div className="flex gap-3">
-                  <button
-                    type="button"
-                    onClick={() => handleRenameBoard(board._id)}
-                    className="text-xs text-blue-300 hover:text-blue-200"
-                  >
-                    Rename
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleDeleteBoard(board._id)}
-                    className="text-xs text-rose-400 hover:text-rose-300"
-                  >
-                    Delete
-                  </button>
-                </div>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    handleRenameBoard(board._id, board.title || "")
+                  }
+                  className="px-3 py-1 text-xs rounded border border-slate-700 hover:bg-slate-800"
+                >
+                  Rename
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteBoard(board._id)}
+                  className="px-3 py-1 text-xs rounded border border-pink-600 text-pink-300 hover:bg-pink-900/40"
+                >
+                  Delete
+                </button>
               </div>
-            ))}
-          </div>
-        )}
+            </div>
+          ))}
+
+          {boards.length === 0 && !loadingBoards && (
+            <p className="text-sm text-slate-400 mt-4">
+              No boards yet. Use the field above to create your first board.
+            </p>
+          )}
+        </div>
       </div>
     </main>
   );

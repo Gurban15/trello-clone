@@ -1,31 +1,29 @@
-// app/api/boards/[id]/route.tsx
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Board from "@/models/Board";
 import List from "@/models/List";
 import Card from "@/models/Card";
 
-type RouteParams = {
-  id: string;
-};
-
 type RouteContext = {
-  params: Promise<RouteParams>;
+  params: Promise<{ id: string }>;
 };
 
-// PATCH /api/boards/:id  → rename board
-export async function PATCH(
-  req: NextRequest,
-  { params }: RouteContext
-): Promise<NextResponse> {
-  const { id } = await params;
-
+export async function PATCH(req: NextRequest, context: RouteContext) {
   try {
     await connectDB();
 
-    const { title } = await req.json();
+    const { id } = await context.params; // 👈 params is a Promise in Next 16
+    if (!id) {
+      return NextResponse.json(
+        { message: "Board id is required" },
+        { status: 400 }
+      );
+    }
 
-    if (!title || !title.trim()) {
+    const body = await req.json();
+    const title = (body?.title || "").toString().trim();
+
+    if (!title) {
       return NextResponse.json(
         { message: "Title is required" },
         { status: 400 }
@@ -34,7 +32,7 @@ export async function PATCH(
 
     const updated = await Board.findByIdAndUpdate(
       id,
-      { title: title.trim() },
+      { title },
       { new: true }
     ).lean();
 
@@ -45,12 +43,7 @@ export async function PATCH(
       );
     }
 
-    const safeBoard = {
-      _id: updated._id.toString(),
-      title: updated.title,
-    };
-
-    return NextResponse.json(safeBoard, { status: 200 });
+    return NextResponse.json(updated, { status: 200 });
   } catch (err) {
     console.error("PATCH /api/boards/[id] error", err);
     return NextResponse.json(
@@ -60,17 +53,19 @@ export async function PATCH(
   }
 }
 
-// DELETE /api/boards/:id → delete board + its lists + cards
-export async function DELETE(
-  _req: NextRequest,
-  { params }: RouteContext
-): Promise<NextResponse> {
-  const { id } = await params;
-
+export async function DELETE(req: NextRequest, context: RouteContext) {
   try {
     await connectDB();
 
-    const board = await Board.findById(id);
+    const { id } = await context.params; // 👈 await params
+    if (!id) {
+      return NextResponse.json(
+        { message: "Board id is required" },
+        { status: 400 }
+      );
+    }
+
+    const board = await Board.findById(id).lean();
     if (!board) {
       return NextResponse.json(
         { message: "Board not found" },
@@ -78,21 +73,18 @@ export async function DELETE(
       );
     }
 
-    // find lists for this board
     const lists = await List.find({ boardId: id }).select("_id").lean();
     const listIds = lists.map((l: any) => l._id);
 
+    await List.deleteMany({ boardId: id });
+
     if (listIds.length > 0) {
-      // delete cards inside those lists
       await Card.deleteMany({ listId: { $in: listIds } });
-      // delete the lists
-      await List.deleteMany({ _id: { $in: listIds } });
     }
 
-    // finally delete the board itself
-    await board.deleteOne();
 
-    // empty 204 response
+    await Board.findByIdAndDelete(id);
+
     return new NextResponse(null, { status: 204 });
   } catch (err) {
     console.error("DELETE /api/boards/[id] error", err);

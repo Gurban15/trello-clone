@@ -1,20 +1,13 @@
-// app/api/boards/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import connectDB from "@/lib/mongodb";
 import Board from "@/models/Board";
 
-export async function GET(_req: NextRequest) {
+
+export async function GET() {
   try {
     await connectDB();
-
     const boards = await Board.find().sort({ createdAt: 1 }).lean();
-
-    const safeBoards = boards.map((b: any) => ({
-      _id: b._id.toString(),
-      title: b.title,
-    }));
-
-    return NextResponse.json(safeBoards, { status: 200 });
+    return NextResponse.json({ boards });
   } catch (err) {
     console.error("GET /api/boards error", err);
     return NextResponse.json(
@@ -24,27 +17,25 @@ export async function GET(_req: NextRequest) {
   }
 }
 
+
 export async function POST(req: NextRequest) {
   try {
-    const { title } = await req.json();
+    await connectDB();
 
-    if (!title || !title.trim()) {
+    const body = await req.json();
+    const rawTitle = (body?.title ?? "").toString();
+    const title = rawTitle.trim();
+
+    if (!title) {
       return NextResponse.json(
         { message: "Title is required" },
         { status: 400 }
       );
     }
 
-    await connectDB();
+    const board = await Board.create({ title });
 
-    const board = await Board.create({ title: title.trim() });
-
-    const safeBoard = {
-      _id: board._id.toString(),
-      title: board.title,
-    };
-
-    return NextResponse.json(safeBoard, { status: 201 });
+    return NextResponse.json(board, { status: 201 });
   } catch (err) {
     console.error("POST /api/boards error", err);
     return NextResponse.json(
